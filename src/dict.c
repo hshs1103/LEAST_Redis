@@ -553,17 +553,33 @@ dictIterator *dictGetIterator(dict *d)
 }
 
 //hshs1103
-dictIterator *dictGetSafeIteratorwithMinMaxIdx(dict *d, int min, int max){
-    dictIterator *i = dictGetIteratorwithMinMaxIdx(d, min, max);
-    i->safe = 1;
-    return i;
+dictIterator *dictGetIteratorwithMinMaxIdx(dict *d, int min, int max){
+    dictIterator *iter = zmalloc(sizeof(*iter));
+
+    iter->d = d;
+    iter->table = 0;
+    iter->index = (long) min-1;
+    iter->minindex = (long) min;
+    iter->maxindex = (long) max;
+    iter->safe = 0;
+    iter->entry = NULL;
+    iter->nextEntry = NULL;
+    return iter;
+}
+dictIterator *dictGetIteratorwithMaxIdx(dict *d, int min, int max){
+	dictIterator *iter = zmalloc(sizeof(*iter));
+
+	iter->d = d;
+	iter->table = 0;
+	iter->index = -1;
+	iter->minindex = (long) min;
+	iter->maxindex = (long) max;
+	iter->safe = 0;
+	iter->entry = NULL;
+	iter->nextEntry = NULL;
+	return iter;
 }
 
-dictIterator *dictGetSafeIteratorwithMaxIdx(dict *d, int min, int max){
-    dictIterator *i = dictGetIteratorwithMaxIdx(d, min, max);
-    i->safe = 1;
-    return i;
-}
 
 dictIterator *dictGetSafeIterator(dict *d) {
     dictIterator *i = dictGetIterator(d);
@@ -584,6 +600,14 @@ dictIterator *dictGetSafeIteratorwithMaxIdx(dict *d, int min, int max){
     i->safe = 1;
     return i;
 }
+
+dictIterator *dictGetSafeIterator(dict *d) {
+    dictIterator *i = dictGetIterator(d);
+
+    i->safe = 1;
+    return i;
+}
+
 
 dictEntry *dictNext(dictIterator *iter)
 {
