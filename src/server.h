@@ -433,6 +433,8 @@ typedef long long mstime_t; /* millisecond time type. */
 
 //hshs1103
 #define RDB_CHILD_TYPE_AOF_WITH_RDB 3
+#define RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB 4
+#define RDB_CHILD_TYPE_PARALLEL_RDB 5
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -1077,6 +1079,7 @@ struct redisServer {
 
     //hshs1103
     int aof_with_rdb_state;
+    int rdb_pthread;
 
     /* Logging */
     char *logfile;                  /* Path of log file */
@@ -1549,11 +1552,12 @@ void stopLoading(void);
 //hshs1103
 void loadData_aof_with_rdb(void);
 void aof_with_rdb(void);
-
+void loadData_aof_with_parallel_rdb(void);
 
 /* RDB persistence */
 #include "rdb.h"
 int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi);
+int rdbParallelSaveRio(rio *rdb, int *error, int flags, int min_idx, int max_idx,rdbSaveInfo *rsi, int idx); //hshs1103 -pmode
 
 /* AOF persistence */
 void flushAppendOnlyFile(int force);

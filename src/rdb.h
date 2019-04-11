@@ -153,7 +153,15 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 
 //hshs1103
+int rdbParallelSave();
 int rdbSaveWithoutRename();
+int rdbSaveParallelWithoutRename();
 void aof_with_rdb_DoneHandler(int exitcode, int bysignal);
+void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal);
+void rdbRemoveAllTempFile(int file_count);
+void rdbRenameAllTempFile(int file_count);
+int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi);
+int checkdumpfile(int file_count);
+int checktempfile(int file_count);
 
 #endif

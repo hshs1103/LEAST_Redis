@@ -455,7 +455,10 @@ void loadServerConfigFromString(char *config) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
             server.aof_state = yes ? AOF_ON : AOF_OFF;
+        } else if ( !strcasecmp(argv[0], "parallel_rdb_thread") && argc ==2) { //hshs1103 parallel pthread number
+        	server.rdb_pthread = atoi(argv[1]);
         }
+
         //hshs1103
         else if (!strcasecmp(argv[0],"aofmode") && argc == 2) {
             int mode = aofmode(argv[1]);
@@ -470,7 +473,7 @@ void loadServerConfigFromString(char *config) {
                 server.aof_state = AOF_ON;
                 server.aof_with_rdb_state = REDIS_AOF_WITH_RDB_ON;
                 break;
-            case REDIS_AOFMODE_RDB_ONLY: // with_rdb
+            case REDIS_AOFMODE_RDB_ONLY: // rdb_only
                 /* aof_with_rdb_state = ON */
                 server.aof_state = AOF_OFF;
                 server.aof_with_rdb_state = REDIS_AOF_WITH_RDB_OFF;

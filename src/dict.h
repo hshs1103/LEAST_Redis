@@ -88,6 +88,8 @@ typedef struct dict {
 typedef struct dictIterator {
     dict *d;
     long index;
+    //hshs1103
+    long minindex, maxindex;
     int table, safe;
     dictEntry *entry, *nextEntry;
     /* unsafe iterator fingerprint for misuse detection. */
@@ -180,6 +182,13 @@ uint8_t *dictGetHashFunctionSeed(void);
 unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, dictScanBucketFunction *bucketfn, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
 dictEntry **dictFindEntryRefByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
+
+//hshs1103 parallel rdb
+dictIterator *dictGetSafeIteratorwithMinMaxIdx(dict *d, int min, int max);
+dictIterator *dictGetIteratorwithMinMaxIdx(dict *d, int min, int max);
+dictIterator *dictGetSafeIteratorwithMaxIdx(dict *d, int min, int max);
+dictIterator *dictGetIteratorwithMaxIdx(dict *d,int min, int max);
+dictEntry *dictNextwithIdx(dictIterator *iter);
 
 /* Hash table types */
 extern dictType dictTypeHeapStringCopyKey;

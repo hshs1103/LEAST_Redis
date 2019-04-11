@@ -878,6 +878,112 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     return 1;
 }
 
+//hshs1103
+int rdbParallelSaveRio(rio *rdb, int *error, int flags, int min_idx, int max_idx,rdbSaveInfo *rsi, int idx) {
+    dictIterator *di = NULL;
+    dictEntry *de;
+    char magic[10];
+    int j;
+    uint64_t cksum;
+    size_t processed = 0;
+
+    if (server.rdb_checksum)
+        rdb->update_cksum = rioGenericUpdateChecksum;
+    snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION);
+    if (rdbWriteRaw(rdb,magic,9) == -1) goto werr;
+    if (rdbSaveInfoAuxFields(rdb,flags,rsi) == -1) goto werr;
+
+    for (j = 0; j < 1; j++) {
+        redisDb *db = server.db+j;
+        dict *d = db->dict;
+        if (dictSize(d) == 0) continue;
+        if(min_idx == 0){
+        	 di = dictGetSafeIteratorwithMaxIdx(d, min_idx, max_idx);
+        } else {
+        	 di = dictGetSafeIteratorwithMinMaxIdx(d, min_idx, max_idx);//dictGetSafeIterator(d);
+        }
+
+        if (!di) return C_ERR;
+
+        /* Write the SELECT DB opcode */
+        if (rdbSaveType(rdb,RDB_OPCODE_SELECTDB) == -1) goto werr;
+        if (rdbSaveLen(rdb,j) == -1) goto werr;
+
+        /* Write the RESIZE DB opcode. We trim the size to UINT32_MAX, which
+         * is currently the largest type we are able to represent in RDB sizes.
+         * However this does not limit the actual size of the DB to load since
+         * these sizes are just hints to resize the hash tables. */
+        uint32_t db_size, expires_size;
+        db_size = (dictSize(db->dict) <= UINT32_MAX) ?
+                                dictSize(db->dict) :
+                                UINT32_MAX;
+        expires_size = (dictSize(db->expires) <= UINT32_MAX) ?
+                                dictSize(db->expires) :
+                                UINT32_MAX;
+        if (rdbSaveType(rdb,RDB_OPCODE_RESIZEDB) == -1) goto werr;
+        if (rdbSaveLen(rdb,db_size) == -1) goto werr;
+        if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
+
+        /* Iterate this DB writing every entry */
+        while((de = dictNextwithIdx(di)) != NULL) {
+        	if(di->index >= di->maxindex){
+        		break;
+        	}
+
+        	sds keystr = dictGetKey(de);
+        	robj key, *o = dictGetVal(de);
+        	long long expire;
+
+        	initStaticStringObject(key, keystr);
+        	expire = getExpire(db, &key);
+
+        	if(rdbSaveKeyValuePair(rdb,&key,o,expire) == -1) goto werr;
+
+        	/* When this RDB is produced as part of an AOF rewrite, move
+        	 * accumulated diff from parent to child while rewriting in
+           * order to have a smaller final write. */
+        	if (flags & RDB_SAVE_AOF_PREAMBLE &&
+        			rdb->processed_bytes > processed+AOF_READ_DIFF_INTERVAL_BYTES)
+        	{
+        		processed = rdb->processed_bytes;
+        		aofReadDiffFromParent();
+        	}
+        }
+
+        dictReleaseIterator(di);
+    }
+    di = NULL; /* So that we don't release it again on error. */
+
+    /* If we are storing the replication information on disk, persist
+     * the script cache as well: on successful PSYNC after a restart, we need
+     * to be able to process any EVALSHA inside the replication backlog the
+     * master will send us. */
+    if (rsi && dictSize(server.lua_scripts)) {
+        di = dictGetIterator(server.lua_scripts);
+        while((de = dictNext(di)) != NULL) {
+            robj *body = dictGetVal(de);
+            if (rdbSaveAuxField(rdb,"lua",3,body->ptr,sdslen(body->ptr)) == -1)
+                goto werr;
+        }
+        dictReleaseIterator(di);
+    }
+
+    /* EOF opcode */
+    if (rdbSaveType(rdb,RDB_OPCODE_EOF) == -1) goto werr;
+
+    /* CRC64 checksum. It will be zero if checksum computation is disabled, the
+     * loading code skips the check in this case. */
+    cksum = rdb->cksum;
+    memrev64ifbe(&cksum);
+    if (rioWrite(rdb,&cksum,8) == 0) goto werr;
+    return C_OK;
+
+werr:
+    if (error) *error = errno;
+    if (di) dictReleaseIterator(di);
+    return C_ERR;
+}
+
 /* Produces a dump of the database in RDB format sending it to the specified
  * Redis I/O channel. On success C_OK is returned, otherwise C_ERR
  * is returned and part of the output, or all the output, can be
@@ -1006,6 +1112,130 @@ werr: /* Write error. */
     return C_ERR;
 }
 
+//hshs1103 -parallel mode
+void *parallel_rdbsave_job(void *data){
+
+	char tmpfile[256];
+	FILE *fp;
+	rio rdb;
+	int error; // =0;
+
+	int idx = (int) data;
+	redisDb *db = server.db;
+
+	int hash_size = 0;
+	if(db->dict->ht[0].size < db->dict->ht[1].size){
+		hash_size = db->dict->ht[1].size;
+	}
+	else {
+		hash_size = db->dict->ht[0].size;
+	}
+
+
+	/*Min/Max Index creation*/
+	int min_idx, max_idx;
+
+	int quotient = hash_size / server.rdb_pthread;
+	int remainder = hash_size % server.rdb_pthread;
+
+	/*version1*/
+	if(remainder != 0){
+		if(idx == server.rdb_pthread ){
+			min_idx = (idx - 1) * quotient;
+			max_idx = (idx * quotient) + remainder;
+		}
+		else {
+			min_idx = (idx - 1) * quotient;
+			max_idx = idx * quotient;
+		}
+	}
+	else {
+		min_idx = (idx - 1) * quotient;
+		max_idx = idx * quotient;
+	}
+	//serverLog(LL_VERBOSE, "[TH:%d], min: %d, max: %d", idx, min_idx, max_idx);
+
+	/*tmp rdb file*/
+	snprintf(tmpfile, 256, "temp%d.rdb", (int) idx);
+	//snprintf(tmpfile, 256, "temp%d-%d.rdb", (int) idx, (int) getpid());
+	fp = fopen(tmpfile, "w");
+	if (!fp) {
+		serverLog(LL_WARNING, "Failed opening .rdb for saving: %s",
+				strerror(errno));
+		return C_ERR;
+    }
+
+	rioInitWithFile(&rdb, fp);
+	if (rdbParallelSaveRio(&rdb,&error,RDB_SAVE_NONE,min_idx,max_idx,NULL, idx) == C_ERR) {  //RDB_SAVE_PARALLEL
+		serverLog(LL_VERBOSE, "rdbParallelSaveRio ERROR");
+		fclose(fp);
+		unlink(tmpfile);
+		return C_ERR;
+    }
+
+
+    /* Make sure data will not remain on the OS's output buffers */
+    if (fflush(fp) == EOF) {
+    	serverLog(LL_VERBOSE, "fflush ERROR");
+    	fclose(fp);
+    	unlink(tmpfile);
+    	return C_ERR;
+    }
+
+    if (fsync(fileno(fp)) == -1) {
+    	serverLog(LL_VERBOSE, "fsync ERROR");
+    	fclose(fp);
+    	unlink(tmpfile);
+    	return C_ERR;
+    }
+    if (fclose(fp) == EOF) {
+    	serverLog(LL_VERBOSE, "fclose ERROR");
+    	fclose(fp);
+    	unlink(tmpfile);
+    	return C_ERR;
+    }
+
+    return C_OK;//(void *)(C_OK);
+}
+
+int rdbParallelSave(){
+    pthread_t p_thread[server.rdb_pthread];
+    int thr_id, p_status, m_status;
+    int i, j;
+    int num =0;
+
+    for(i=0; i<server.rdb_pthread; i++){
+    	int idx = i+1;
+    	if(i != server.rdb_pthread -1){
+    		thr_id = pthread_create(&p_thread[i], NULL, parallel_rdbsave_job, (void *)idx);
+    	} else {
+    		m_status = parallel_rdbsave_job((void *)idx);
+    		if(m_status ==0) num++;
+    	}
+    }
+
+    for(j=0; j<server.rdb_pthread-1; j++){
+    	pthread_join(p_thread[j], (void **)&p_status);
+    	if(p_status ==0) num++;
+
+    }
+    if(num == server.rdb_pthread){
+
+    	serverLog(LL_WARNING, "DB saved on disk(Parallel rdb mode)");
+    	server.dirty = 0;
+    	server.lastsave = time(NULL);
+    	server.lastbgsave_status = C_OK;
+
+    	return C_OK;
+
+    } else {
+
+    	serverLog(LL_WARNING,"DB fail to save on disk(parallel rdb mode)");
+
+    	return C_ERR;
+    }
+}
+
 /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
 int rdbSave(char *filename, rdbSaveInfo *rsi) {
     char tmpfile[256];
@@ -1053,7 +1283,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    serverLog(LL_NOTICE,"DB saved on disk");
+    serverLog(LL_WARNING,"DB saved on disk");
     server.dirty = 0;
     server.lastsave = time(NULL);
     server.lastbgsave_status = C_OK;
@@ -1065,6 +1295,47 @@ werr:
     unlink(tmpfile);
     return C_ERR;
 }
+
+//hshs1103 - parallel less
+int rdbSaveParallelWithoutRename(){
+
+    pthread_t p_thread[server.rdb_pthread];
+    int thr_id, p_status, m_status;
+    int i, j;
+    int num =0;
+
+    for(i=0; i<server.rdb_pthread; i++){
+    	int idx = i+1;
+    	if(i != server.rdb_pthread -1){
+    		thr_id = pthread_create(&p_thread[i], NULL, parallel_rdbsave_job, (void *)idx);
+    	} else {
+    		m_status = parallel_rdbsave_job((void *)idx);
+    		if(m_status ==0) num++;
+    	}
+    }
+
+    for(j=0; j<server.rdb_pthread-1; j++){
+    	pthread_join(p_thread[j], (void **)&p_status);
+    	if(p_status ==0) num++;
+
+    }
+    if(num == server.rdb_pthread){
+
+    	serverLog(LL_WARNING, "DB saved on disk(aof_with_parallel_rdb mode)");
+    	server.dirty = 0;
+    	server.lastsave = time(NULL);
+    	server.lastbgsave_status = C_OK;
+
+    	return C_OK;
+
+    } else {
+
+    	serverLog(LL_WARNING,"DB fail to save on disk(aof_with_parallel_rdb mode)");
+
+    	return C_ERR;
+    }
+}
+
 
 //hshs1103
 int rdbSaveWithoutRename() {
@@ -1093,7 +1364,7 @@ int rdbSaveWithoutRename() {
     if (fclose(fp) == EOF) goto werr;
 
 
-    serverLog(LL_NOTICE,"DB saved on disk(aof_with_rdb mode)");
+    serverLog(LL_WARNING,"DB saved on disk(aof_with_rdb mode)");
     server.dirty = 0;
     server.lastsave = time(NULL);
     server.lastbgsave_status = C_OK;
@@ -1128,10 +1399,20 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
 
         //hshs1103-withrdb
         if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON){
-        	retval = rdbSaveWithoutRename();
-        }
-        else {
-        	retval = rdbSave(filename,rsi);
+        	if(server.rdb_pthread > 1){
+        		retval = rdbSaveParallelWithoutRename();
+
+        	} else {
+        		retval = rdbSaveWithoutRename();
+        	}
+        } else {
+
+        	if(server.rdb_pthread > 1){
+        		retval = rdbParallelSave();
+        	}
+        	else {
+        		retval = rdbSave(filename,rsi);
+        	}
         }
         if (retval == C_OK) {
             size_t private_dirty = zmalloc_get_private_dirty(-1);
@@ -1163,17 +1444,54 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         server.rdb_child_pid = childpid;
 
         //hshs1103
-        if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON){
+        if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON & server.rdb_pthread == 1){
         	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_RDB;
+        }
+        else if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON & server.rdb_pthread > 1) {
+        	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB;
+        }
+        else if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF & server.rdb_pthread > 1) {
+        	server.rdb_child_type = RDB_CHILD_TYPE_PARALLEL_RDB;
         }
         else {
         	server.rdb_child_type = RDB_CHILD_TYPE_DISK;
         }
 
+
+        //server.rdb_child_type = RDB_CHILD_TYPE_DISK;
         updateDictResizePolicy();
         return C_OK;
     }
     return C_OK; /* unreached */
+}
+
+//hshs1103 - p mode
+void rdbRemoveAllTempFile(int file_count){
+	char tmpfile[256];
+	int i;
+	for(i=0; i < file_count; i++){
+		memset(tmpfile, 0, sizeof(tmpfile));
+		snprintf(tmpfile, sizeof(tmpfile), "temp%d.rdb", i+1);
+		unlink(tmpfile);
+	}
+}
+
+void rdbRenameAllTempFile(int file_count){
+
+	char tmpfile[256];
+	char dumpfile[256];
+	int i;
+	for(i=0; i < file_count; i++){
+		memset(tmpfile, 0, sizeof(tmpfile));
+		memset(dumpfile, 0, sizeof(dumpfile));
+		snprintf(tmpfile, sizeof(tmpfile), "temp%d.rdb", i+1);
+		snprintf(dumpfile, sizeof(dumpfile), "dump%d.rdb", i+1);
+
+		if(rename(tmpfile, dumpfile) == -1){
+			serverLog(LL_WARNING, "Error trying to rename the temporary RDB file : %s", strerror(errno));
+			exit(1);
+		}
+	}
 }
 
 void rdbRemoveTempFile(pid_t childpid) {
@@ -1752,6 +2070,86 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi) {
     return retval;
 }
 
+//hshs1103 -p load
+int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
+
+	serverLog(LL_WARNING, "START PARALLEL RDB LOAD");
+	char rdbfile[256];
+	FILE *fp;
+	rio rdb;
+	int retval;
+
+	int i;
+	/*dump rdb*/
+	if(flags == 1){
+		for(i=0; i < server.rdb_pthread; i++){
+			int idx = i+1;
+			memset(rdbfile, 0, sizeof(rdbfile));
+			snprintf(rdbfile, 256, "dump%d.rdb",idx);
+			if((fp = fopen(rdbfile, "r")) == NULL)
+				continue;
+			startLoading(fp);
+			rioInitWithFile(&rdb,fp);
+			retval = rdbLoadRio(&rdb,rsi,0);
+			fclose(fp);
+			stopLoading();
+		}
+		serverLog(LL_WARNING, "END PARALLEL DUMP RDB LOAD");
+		return C_OK;
+	}
+	/*temp rdb*/
+	else {
+		for(i=0; i < server.rdb_pthread; i++){
+			int idx = i+1;
+			memset(rdbfile, 0, sizeof(rdbfile));
+			snprintf(rdbfile, 256, "temp%d.rdb",idx);
+			if((fp = fopen(rdbfile, "r")) == NULL)
+				continue;
+			startLoading(fp);
+			rioInitWithFile(&rdb,fp);
+			retval = rdbLoadRio(&rdb,rsi,0);
+			fclose(fp);
+			stopLoading();
+		}
+		serverLog(LL_WARNING, "END PARALLEL TEMP RDB LOAD");
+		return C_OK;
+	}
+}
+
+int checkdumpfile(int file_count){
+
+	int i;
+	char rdbfile[256];
+
+	for(i=0; i < file_count; i++){
+
+		memset(rdbfile, 0, sizeof(rdbfile));
+		snprintf(rdbfile, 256, "dump%d.rdb",i+1);
+		if (access(rdbfile, F_OK) == 0){
+			return C_OK;
+		}
+	}
+
+	return C_ERR;
+}
+int checktempfile(int file_count){
+
+	int i;
+	char rdbfile[256];
+
+	for(i=0; i < file_count; i++){
+
+		memset(rdbfile, 0, sizeof(rdbfile));
+		snprintf(rdbfile, 256, "temp%d.rdb",i+1);
+		if (access(rdbfile, F_OK) == 0){
+			return C_OK;
+		}
+	}
+
+	return C_ERR;
+}
+
+
 /* A background saving child (BGSAVE) terminated its work. Handle this.
  * This function covers the case of actual BGSAVEs. */
 void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
@@ -1786,6 +2184,46 @@ void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
 }
+
+//hshs1103 - parallel donehandler
+void ParallelbackgroundSaveDoneHandlerDisk(int exitcode, int bysignal){
+    if (!bysignal && exitcode == 0) {
+        serverLog(LL_NOTICE,
+            "Parallel Background saving terminated with success");
+        server.dirty = server.dirty - server.dirty_before_bgsave;
+        server.lastsave = time(NULL);
+        server.lastbgsave_status = C_OK;
+    } else if (!bysignal && exitcode != 0) {
+        serverLog(LL_WARNING, "Parallel Background saving error");
+        server.lastbgsave_status = C_ERR;
+    } else {
+        mstime_t latency;
+
+        serverLog(LL_WARNING,
+            "Parallel Background saving terminated by signal %d", bysignal);
+        latencyStartMonitor(latency);
+        rdbRemoveAllTempFile(server.rdb_pthread);
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("rdb-unlink-temp-file",latency);
+        /* SIGUSR1 is whitelisted, so we have a way to kill a child without
+         * tirggering an error conditon. */
+        if (bysignal != SIGUSR1)
+            server.lastbgsave_status = C_ERR;
+    }
+
+    /*renaming rdb file*/
+   	rdbRenameAllTempFile(server.rdb_pthread);
+
+
+    server.rdb_child_pid = -1;
+    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
+    server.rdb_save_time_start = -1;
+    /* Possibly there are slaves waiting for a BGSAVE in order to be served
+     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
+}
+
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
  * This function covers the case of RDB -> Salves socket transfers for
@@ -1894,6 +2332,12 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
         //hshs1103
     case RDB_CHILD_TYPE_AOF_WITH_RDB:
     	aof_with_rdb_DoneHandler(exitcode, bysignal);
+    	break;
+    case RDB_CHILD_TYPE_PARALLEL_RDB:
+    	ParallelbackgroundSaveDoneHandlerDisk(exitcode, bysignal);
+    	break;
+    case RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB:
+    	aof_with_parallel_rdb_DoneHandler(exitcode, bysignal);
     	break;
     default:
         serverPanic("Unknown RDB child type.");

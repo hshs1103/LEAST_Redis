@@ -1720,7 +1720,7 @@ int append_selected_db_command(int fd){ // Append Select DB Command
 void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File Complete
 
     if (!bysignal && exitcode == 0) {
-    	serverLog(LL_NOTICE,
+    	serverLog(LL_WARNING,
             "Background saving terminated with success(aof_with_rdb)");
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = time(NULL);
@@ -1769,10 +1769,66 @@ void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File C
     if (server.aof_state == AOF_WAIT_REWRITE ||  // Change AOF State
         server.aof_state == AOF_WAIT_AOF_WITH_RDB)
         server.aof_state = AOF_ON;
+
+    serverLog(LL_WARNING,"Finish all job about aof_with_rdb!!!");
 }
 
 
+//hshs1103 p mode
+void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File Complete
+
+    if (!bysignal && exitcode == 0) {
+    	serverLog(LL_WARNING,
+            "Background saving terminated with success(aof_with_parallel_rdb)");
+        server.dirty = server.dirty - server.dirty_before_bgsave;
+        server.lastsave = time(NULL);
+        server.lastbgsave_status = C_OK;
+    } else if (!bysignal && exitcode != 0) {
+    	serverLog(LL_WARNING, "Background saving error");
+        server.lastbgsave_status = C_ERR;
+    } else {
+        mstime_t latency;
+        serverLog(LL_WARNING,
+            "Background saving terminated by signal %d", bysignal);
+        latencyStartMonitor(latency);
+        rdbRemoveAllTempFile(server.rdb_pthread);
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("rdb-unlink-temp-file",latency);
+        /* SIGUSR1 is whitelisted, so we have a way to kill a child without
+         * tirggering an error conditon. */
+        if (bysignal != SIGUSR1)
+            server.lastbgsave_status = C_ERR;
+    }
+
+    server.rdb_child_pid = -1;
+    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
+    server.rdb_save_time_start = -1;
+
+    /* Possibly there are slaves waiting for a BGSAVE in order to be served
+     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
+
+    if (rename(REDIS_DEFAULT_TEMP_AOF_FILENAME,server.aof_filename) == -1) { // rename temp aof
+    	serverLog(LL_WARNING,
+            "Error trying to rename the temporary AOF file: %s", strerror(errno));
+        exit(1);
+    }
+
+    rdbRenameAllTempFile(server.rdb_pthread);
+
+    server.aof_selected_db = -1;
+    aofUpdateCurrentSize();
+    server.aof_rewrite_base_size = server.aof_current_size * 2; // Change Current AOF File Size
+    server.aof_lastbgrewrite_status = C_OK;
+    if (server.aof_state == AOF_WAIT_REWRITE ||  // Change AOF State
+        server.aof_state == AOF_WAIT_AOF_WITH_RDB)
+        server.aof_state = AOF_ON;
+
+    serverLog(LL_WARNING,"Finish all job about aof_with_parallel_rdb!!!");
+}
 void aof_with_rdb() {
+	serverLog(LL_WARNING, "AOF_with_RDB logging start");
     FILE *fp;
     int ret;
 

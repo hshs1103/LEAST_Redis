@@ -1397,6 +1397,7 @@ void initServerConfig(void) {
     server.daemonize = CONFIG_DEFAULT_DAEMONIZE;
     //hshs1103
     server.aof_with_rdb_state = REDIS_AOF_WITH_RDB_OFF;
+    server.rdb_pthread =1; //hshs1103 add
 
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
@@ -2592,14 +2593,31 @@ int prepareForShutdown(int flags) {
         /* Snapshotting. Perform a SYNC SAVE and exit */
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
-             * operating. Note that if there was a background saving process,
-             * in the next cron() Redis will be notified that the background
-             * saving aborted, handling special stuff like slaves pending for
-             * synchronization... */
-            serverLog(LL_WARNING,"Error trying to save the DB, can't exit.");
-            return C_ERR;
+
+        if(server.rdb_pthread > 1){
+
+             if (rdbParallelSave() != C_OK) {
+                 /* Ooops.. error saving! The best we can do is to continue
+                  * operating. Note that if there was a background saving process,
+                  * in the next cron() Redis will be notified that the background
+                  * saving aborted, handling special stuff like slaves pending for
+                  * synchronization... */
+                 serverLog(LL_WARNING,"Error trying to save the DB, can't exit.");
+                 return C_ERR;
+             } else {
+             	rdbRenameAllTempFile(server.rdb_pthread);
+             }
+         } else {
+
+             if (rdbSave(server.rdb_filename,rsiptr) != C_OK) {
+                 /* Ooops.. error saving! The best we can do is to continue
+                  * operating. Note that if there was a background saving process,
+                  * in the next cron() Redis will be notified that the background
+                  * saving aborted, handling special stuff like slaves pending for
+                  * synchronization... */
+                 serverLog(LL_WARNING,"Error trying to save the DB, can't exit.");
+                 return C_ERR;
+             }
         }
     }
 
@@ -3572,47 +3590,109 @@ int checkForSentinelMode(int argc, char **argv) {
 void loadDataFromDisk(void) {
 	//hshs1103
 	if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) {
-        serverLog(LL_NOTICE, "aof_with_rdb on");
-        loadData_aof_with_rdb();
-        return;
-
+		if(server.rdb_pthread > 1){
+	        serverLog(LL_WARNING, "aof_with_parallel_rdb on");
+	        loadData_aof_with_parallel_rdb();
+	        return;
+		} else {
+	        serverLog(LL_WARNING, "aof_with_rdb on");
+	        loadData_aof_with_rdb();
+	        return;
+		}
 	}//fix later
     else if (server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF && server.aof_state == AOF_ON)
-        serverLog(LL_NOTICE, "aof_only on!");
+        serverLog(LL_WARNING, "aof_only on!");
+    else if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF && server.aof_state == AOF_OFF)
+    	serverLog(LL_WARNING, "rdb_only on!");
     else
-    	serverLog(LL_NOTICE, "rdb_only off!");
+    	serverLog(LL_NOTICE, "LOGGING MODE ERROR!");
 
     long long start = ustime();
-    if (server.aof_state == AOF_ON || server.aof_with_rdb_state ==  REDIS_AOF_WITH_RDB_ON) {
+    if (server.aof_state == AOF_ON && server.aof_with_rdb_state ==  REDIS_AOF_WITH_RDB_OFF) {
         if (loadAppendOnlyFile(server.aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-        if (rdbLoad(server.rdb_filename,&rsi) == C_OK) {
-            serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
-                (float)(ustime()-start)/1000000);
+        if(server.rdb_pthread > 1){
+        	if(Parallel_rdbLoad(1, NULL) == C_OK) {
+                serverLog(LL_WARNING,"DB loaded from disk: %.3f seconds",
+                    (float)(ustime()-start)/1000000);
 
-            /* Restore the replication ID / offset from the RDB file. */
-            if (server.masterhost &&
-                rsi.repl_id_is_set &&
-                rsi.repl_offset != -1 &&
-                /* Note that older implementations may save a repl_stream_db
-                 * of -1 inside the RDB file in a wrong way, see more information
-                 * in function rdbPopulateSaveInfo. */
-                rsi.repl_stream_db != -1)
-            {
-                memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
-                server.master_repl_offset = rsi.repl_offset;
-                /* If we are a slave, create a cached master from this
-                 * information, in order to allow partial resynchronizations
-                 * with masters. */
-                replicationCacheMasterUsingMyself();
-                selectDb(server.cached_master,rsi.repl_stream_db);
+                /* Restore the replication ID / offset from the RDB file. */
+                if (server.masterhost &&
+                    rsi.repl_id_is_set &&
+                    rsi.repl_offset != -1 &&
+                    /* Note that older implementations may save a repl_stream_db
+                     * of -1 inside the RDB file in a wrong way, see more information
+                     * in function rdbPopulateSaveInfo. */
+                    rsi.repl_stream_db != -1)
+                {
+                    memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
+                    server.master_repl_offset = rsi.repl_offset;
+                    /* If we are a slave, create a cached master from this
+                     * information, in order to allow partial resynchronizations
+                     * with masters. */
+                    replicationCacheMasterUsingMyself();
+                    selectDb(server.cached_master,rsi.repl_stream_db);
+                }
+            }     else if (errno != ENOENT) {
+                serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
+                exit(1);
             }
-        } else if (errno != ENOENT) {
-            serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
-            exit(1);
+        } else {
+            if (rdbLoad(server.rdb_filename,&rsi) == C_OK) {
+                serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+                    (float)(ustime()-start)/1000000);
+
+                /* Restore the replication ID / offset from the RDB file. */
+                if (server.masterhost &&
+                    rsi.repl_id_is_set &&
+                    rsi.repl_offset != -1 &&
+                    /* Note that older implementations may save a repl_stream_db
+                     * of -1 inside the RDB file in a wrong way, see more information
+                     * in function rdbPopulateSaveInfo. */
+                    rsi.repl_stream_db != -1)
+                {
+                    memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
+                    server.master_repl_offset = rsi.repl_offset;
+                    /* If we are a slave, create a cached master from this
+                     * information, in order to allow partial resynchronizations
+                     * with masters. */
+                    replicationCacheMasterUsingMyself();
+                    selectDb(server.cached_master,rsi.repl_stream_db);
+                }
+            }     else if (errno != ENOENT) {
+                serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
+                exit(1);
+            }
         }
+
+//        if (rdbLoad(server.rdb_filename,&rsi) == C_OK) {
+//            serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+//                (float)(ustime()-start)/1000000);
+//
+//            /* Restore the replication ID / offset from the RDB file. */
+//            if (server.masterhost &&
+//                rsi.repl_id_is_set &&
+//                rsi.repl_offset != -1 &&
+//                /* Note that older implementations may save a repl_stream_db
+//                 * of -1 inside the RDB file in a wrong way, see more information
+//                 * in function rdbPopulateSaveInfo. */
+//                rsi.repl_stream_db != -1)
+//            {
+//                memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
+//                server.master_repl_offset = rsi.repl_offset;
+//                /* If we are a slave, create a cached master from this
+//                 * information, in order to allow partial resynchronizations
+//                 * with masters. */
+//                replicationCacheMasterUsingMyself();
+//                selectDb(server.cached_master,rsi.repl_stream_db);
+//            }
+//        }
+//        else if (errno != ENOENT) {
+//            serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
+//            exit(1);
+//        }
     }
 }
 
@@ -3620,16 +3700,63 @@ void loadDataFromDisk(void) {
 //modify_test
 /* TODO : check file list, recovery start */
 void loadData_aof_with_rdb(void) {
-	serverLog(LL_NOTICE, "AOF with RDB Start");
-long long start = ustime();
-bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
+	serverLog(LL_WARNING, "Load aof_with_rdb");
+	long long start = ustime();
+	bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
 
 if (access(REDIS_DEFAULT_TEMP_AOF_FILENAME, F_OK) == 0) temp_aof = true;
 if (access(REDIS_DEFAULT_TEMP_RDB_FILENAME, F_OK) == 0) temp_rdb = true;
 if (access(server.aof_filename, F_OK) == 0) aof = true;
 if (access(server.rdb_filename, F_OK) == 0) rdb = true;
 
-if (aof && temp_aof && rdb && !temp_rdb) {
+if (aof && !temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (rdbLoad(REDIS_DEFAULT_TEMP_RDB_FILENAME, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && !temp_rdb){
+    start = ustime();
+    if (rdbLoad(server.rdb_filename, NULL) == C_OK) {
+    serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+        (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK)
+        serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+}
+else if (aof && temp_aof && rdb && !temp_rdb) {
     start = ustime();
     if (rdbLoad(server.rdb_filename, NULL) == C_OK) {
     	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
@@ -3643,17 +3770,6 @@ if (aof && temp_aof && rdb && !temp_rdb) {
     if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
-}
-else if (aof && !temp_aof && rdb && !temp_rdb){
-
-    start = ustime();
-    if (rdbLoad(server.rdb_filename, NULL) == C_OK) {
-    serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
-        (float)(ustime()-start)/1000000);
-    }
-    start = ustime();
-    if (loadAppendOnlyFile(server.aof_filename) == C_OK)
-        serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
 }
 else if (aof && temp_aof && rdb && temp_rdb) {
     start = ustime();
@@ -3682,17 +3798,116 @@ else if (aof && !temp_aof && rdb && temp_rdb) {
     }
 }
 else {
+	serverLog(LL_WARNING, "File is not existed");
+}
+serverLog(LL_WARNING, "Complete aof_with_rdb");
+}
+
+//hshs1103 p mode
+void loadData_aof_with_parallel_rdb(void) {
+	serverLog(LL_WARNING, "Load aof_with_parallel_rdb");
+long long start = ustime();
+bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
+
+if (access(REDIS_DEFAULT_TEMP_AOF_FILENAME, F_OK) == 0) temp_aof = true;
+if (checktempfile(server.rdb_pthread) == 0) temp_rdb =true;
+if (access(server.aof_filename, F_OK) == 0) aof = true;
+if (checkdumpfile(server.rdb_pthread) == 0) rdb =true;
+
+
+if (aof && !temp_aof && !rdb && !temp_rdb) {
     start = ustime();
-    if (rdbLoad(REDIS_DEFAULT_TEMP_RDB_FILENAME, NULL) == C_OK) {
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(0, NULL) == C_OK) {
     	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && !temp_rdb){
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
         (float)(ustime()-start)/1000000);
     }
     start = ustime();
     if (loadAppendOnlyFile(server.aof_filename) == C_OK)
+        serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+}
+else if (aof && temp_aof && rdb && !temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
     	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
 }
+else if (aof && temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
 }
-
+else if (aof && !temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(0, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"temp DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else {
+	serverLog(LL_WARNING, "File is not existed");
+}
+serverLog(LL_WARNING, "Complete aof_with_parallel_rdb");
+}
 
 void redisOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
