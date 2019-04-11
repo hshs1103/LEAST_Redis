@@ -601,12 +601,6 @@ dictIterator *dictGetSafeIteratorwithMaxIdx(dict *d, int min, int max){
     return i;
 }
 
-dictIterator *dictGetSafeIterator(dict *d) {
-    dictIterator *i = dictGetIterator(d);
-
-    i->safe = 1;
-    return i;
-}
 
 
 dictEntry *dictNext(dictIterator *iter)
