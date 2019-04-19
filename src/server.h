@@ -1553,6 +1553,7 @@ void stopLoading(void);
 void loadData_aof_with_rdb(void);
 void aof_with_rdb(void);
 void loadData_aof_with_parallel_rdb(void);
+void _loadData_aof_with_parallel_rdb(void);
 
 /* RDB persistence */
 #include "rdb.h"

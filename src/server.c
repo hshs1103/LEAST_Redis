@@ -3591,13 +3591,24 @@ void loadDataFromDisk(void) {
 	//hshs1103
 	if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) {
 		if(server.rdb_pthread > 1){
-	        serverLog(LL_WARNING, "aof_with_parallel_rdb on");
-	        loadData_aof_with_parallel_rdb();
-	        return;
+			serverLog(LL_WARNING, "aof_with_parallel_rdb on");
+			if( get_dumpfile_cnt() == 0 && get_tempfile_cnt() ==0){
+				loadData_aof_with_parallel_rdb();
+				return;
+			} else if ( get_dumpfile_cnt() ==0 || get_tempfile_cnt() ==0) {
+				loadData_aof_with_parallel_rdb();
+				return;
+			} else if ( get_dumpfile_cnt() ==  get_tempfile_cnt()) {
+				loadData_aof_with_parallel_rdb();
+				return;
+			} else {
+				_loadData_aof_with_parallel_rdb();
+				return;
+			}
 		} else {
-	        serverLog(LL_WARNING, "aof_with_rdb on");
-	        loadData_aof_with_rdb();
-	        return;
+			serverLog(LL_WARNING, "aof_with_rdb on");
+			loadData_aof_with_rdb();
+			return;
 		}
 	}//fix later
     else if (server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF && server.aof_state == AOF_ON)
@@ -3815,6 +3826,8 @@ if (access(server.aof_filename, F_OK) == 0) aof = true;
 if (checkdumpfile(server.rdb_pthread) == 0) rdb =true;
 
 
+
+
 if (aof && !temp_aof && !rdb && !temp_rdb) {
     start = ustime();
     if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
@@ -3895,6 +3908,113 @@ else if (aof && temp_aof && rdb && temp_rdb) {
 else if (aof && !temp_aof && rdb && temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(0, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"temp DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else {
+	serverLog(LL_WARNING, "File is not existed");
+}
+serverLog(LL_WARNING, "Complete aof_with_parallel_rdb");
+}
+
+void _loadData_aof_with_parallel_rdb(void) {
+	serverLog(LL_WARNING, "Load aof_with_parallel_rdb");
+long long start = ustime();
+bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
+
+if (access(REDIS_DEFAULT_TEMP_AOF_FILENAME, F_OK) == 0) temp_aof = true;
+if (checktempfile(server.rdb_pthread) == 0) temp_rdb =true;
+if (access(server.aof_filename, F_OK) == 0) aof = true;
+if (checkdumpfile(server.rdb_pthread) == 0) rdb =true;
+
+
+
+
+if (aof && !temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(0, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && !temp_rdb){
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+        (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK)
+        serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+}
+else if (aof && temp_aof && rdb && !temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(3, NULL) == C_OK) {
     	serverLog(LL_NOTICE,"temp DB loaded from disk: %.3f seconds",
             (float)(ustime()-start)/1000000);
     }
@@ -4231,9 +4351,9 @@ int main(int argc, char **argv) {
 
 
     //HSHS1103
-    pthread_t p_thread;
-    int thr_id, attr;
-    thr_id = pthread_create(&p_thread, NULL, memory_logging_function, (void *)&attr);
+    //pthread_t p_thread;
+    //int thr_id, attr;
+    //thr_id = pthread_create(&p_thread, NULL, memory_logging_function, (void *)&attr);
 
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);

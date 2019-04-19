@@ -1720,7 +1720,7 @@ int append_selected_db_command(int fd){ // Append Select DB Command
 void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File Complete
 
     if (!bysignal && exitcode == 0) {
-    	serverLog(LL_WARNING,
+    	serverLog(LL_NOTICE,
             "Background saving terminated with success(aof_with_rdb)");
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = time(NULL);
@@ -1770,7 +1770,6 @@ void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File C
         server.aof_state == AOF_WAIT_AOF_WITH_RDB)
         server.aof_state = AOF_ON;
 
-    serverLog(LL_WARNING,"Finish all job about aof_with_rdb!!!");
 }
 
 
@@ -1778,7 +1777,7 @@ void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File C
 void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File Complete
 
     if (!bysignal && exitcode == 0) {
-    	serverLog(LL_WARNING,
+    	serverLog(LL_NOTICE,
             "Background saving terminated with success(aof_with_parallel_rdb)");
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = time(NULL);
@@ -1825,10 +1824,9 @@ void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create R
         server.aof_state == AOF_WAIT_AOF_WITH_RDB)
         server.aof_state = AOF_ON;
 
-    serverLog(LL_WARNING,"Finish all job about aof_with_parallel_rdb!!!");
 }
 void aof_with_rdb() {
-	serverLog(LL_WARNING, "AOF_with_RDB logging start");
+	serverLog(LL_NOTICE, "AOF_with_RDB logging start");
     FILE *fp;
     int ret;
 
@@ -1845,7 +1843,7 @@ void aof_with_rdb() {
     server.aof_fd = fileno(fp); // Change Temp AOF to Current AOF
 
     if(rdbSaveBackground(REDIS_DEFAULT_TEMP_RDB_FILENAME, NULL) == C_OK)  // Create Temp RDB File(Background Process)
-    	serverLog(LL_WARNING, "Background saving started(AOF With RDB Mode)");
+    	serverLog(LL_NOTICE, "Background saving started(AOF With RDB Mode)");
 
 }
 

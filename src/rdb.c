@@ -1321,7 +1321,7 @@ int rdbSaveParallelWithoutRename(){
     }
     if(num == server.rdb_pthread){
 
-    	serverLog(LL_WARNING, "DB saved on disk(aof_with_parallel_rdb mode)");
+    	serverLog(LL_NOTICE, "DB saved on disk(aof_with_parallel_rdb mode)");
     	server.dirty = 0;
     	server.lastsave = time(NULL);
     	server.lastbgsave_status = C_OK;
@@ -1416,7 +1416,7 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         }
         if (retval == C_OK) {
             size_t private_dirty = zmalloc_get_private_dirty(-1);
-
+	    //size_t private_dirty2 = zmalloc_get_private_dirty(-1)/server.rdb_pthread;
             if (private_dirty) {
                 serverLog(LL_NOTICE,
                     "RDB: %zu MB of memory used by copy-on-write",
@@ -2073,7 +2073,6 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi) {
 //hshs1103 -p load
 int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 
-	serverLog(LL_WARNING, "START PARALLEL RDB LOAD");
 	char rdbfile[256];
 	FILE *fp;
 	rio rdb;
@@ -2094,11 +2093,10 @@ int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 			fclose(fp);
 			stopLoading();
 		}
-		serverLog(LL_WARNING, "END PARALLEL DUMP RDB LOAD");
 		return C_OK;
 	}
 	/*temp rdb*/
-	else {
+	else if (flags == 0) {
 		for(i=0; i < server.rdb_pthread; i++){
 			int idx = i+1;
 			memset(rdbfile, 0, sizeof(rdbfile));
@@ -2111,13 +2109,74 @@ int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 			fclose(fp);
 			stopLoading();
 		}
-		serverLog(LL_WARNING, "END PARALLEL TEMP RDB LOAD");
+		return C_OK;
+	}
+	/*exception case*/
+	else {
+		int temp_cnt = get_tempfile_cnt();
+		int dump_cnt = get_dumpfile_cnt();
+		int read_dump = dump_cnt - temp_cnt;
+		for (i=0; i < server.rdb_pthread; i++){
+			int idx = i+1;
+			if (i < read_dump){
+				memset(rdbfile, 0, sizeof(rdbfile));
+				snprintf(rdbfile, 256, "dump%d.rdb",idx);
+				if((fp = fopen(rdbfile, "r")) == NULL)
+					continue;
+				startLoading(fp);
+				rioInitWithFile(&rdb,fp);
+				retval = rdbLoadRio(&rdb,rsi,0);
+				fclose(fp);
+				stopLoading();
+			} else {
+				memset(rdbfile, 0, sizeof(rdbfile));
+				snprintf(rdbfile, 256, "temp%d.rdb",idx);
+				if((fp = fopen(rdbfile, "r")) == NULL)
+					continue;
+				startLoading(fp);
+				rioInitWithFile(&rdb,fp);
+				retval = rdbLoadRio(&rdb,rsi,0);
+				fclose(fp);
+				stopLoading();
+			}
+		}
 		return C_OK;
 	}
 }
 
-int checkdumpfile(int file_count){
+int get_dumpfile_cnt() {
+	int i;
+	char rdbfile[256];
+	int dump_count =0;
 
+	for(i=0; i < server.rdb_pthread; i++){
+
+		memset(rdbfile, 0, sizeof(rdbfile));
+		snprintf(rdbfile, 256, "dump%d.rdb",i+1);
+		if (access(rdbfile, F_OK) == 0){
+			dump_count ++;
+		}
+	}
+
+	return dump_count;
+
+}
+int get_tempfile_cnt() {
+	int i;
+	char rdbfile[256];
+	int temp_count =0;
+	for(i=0; i < server.rdb_pthread; i++){
+
+		memset(rdbfile, 0, sizeof(rdbfile));
+		snprintf(rdbfile, 256, "temp%d.rdb",i+1);
+		if (access(rdbfile, F_OK) == 0){
+			temp_count++;
+		}
+	}
+	return temp_count;
+}
+
+int checkdumpfile(int file_count){
 	int i;
 	char rdbfile[256];
 

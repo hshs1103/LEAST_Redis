@@ -163,5 +163,7 @@ void rdbRenameAllTempFile(int file_count);
 int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi);
 int checkdumpfile(int file_count);
 int checktempfile(int file_count);
+int get_dumpfile_cnt();
+int get_tempfile_cnt();
 
 #endif
