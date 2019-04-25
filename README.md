@@ -1,6 +1,6 @@
 This README is just a fast *quick start* document. You can find more detailed documentation at [redis.io](https://redis.io).
 
-LEAST:MORE IMPROVED LESS
+LEAST:Logging Exploiting A Split snapshoT
 --------------------------------
 
 
