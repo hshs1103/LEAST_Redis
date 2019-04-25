@@ -5,12 +5,15 @@ LEAST:Logging Exploiting A Split snapshoT
 
 To run LEAST mode, you must check the redis.conf file before running Redis.
 
-appendonly yes
+redis.conf 
 
-#default the number of threads is 8
-parallel_rdb_thread 8 
+    appendonly yes
+    
+    #default the number of threads is 8
+    parallel_rdb_thread 8 
+    
+    aofmode with_rdb
 
-aofmode with_rdb
 
 What is Redis?
 --------------
