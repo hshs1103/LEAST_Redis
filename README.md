@@ -2,6 +2,7 @@ This README is just a fast *quick start* document. You can find more detailed do
 
 LEAST:Logging Exploiting A Split snapshoT
 --------------------------------
+LEAST is a persistence method for low memory usage and fast performance taking advantage of parallelism.
 
 To run LEAST mode, you must check the redis.conf file before running Redis.
 
