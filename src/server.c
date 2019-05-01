@@ -3711,7 +3711,6 @@ void loadDataFromDisk(void) {
 //modify_test
 /* TODO : check file list, recovery start */
 void loadData_aof_with_rdb(void) {
-	serverLog(LL_WARNING, "Load aof_with_rdb");
 	long long start = ustime();
 	bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
 
@@ -3811,12 +3810,11 @@ else if (aof && !temp_aof && rdb && temp_rdb) {
 else {
 	serverLog(LL_WARNING, "File is not existed");
 }
-serverLog(LL_WARNING, "Complete aof_with_rdb");
+serverLog(LL_WARNING, "recovery complete (aof_with_rdb mode)");
 }
 
 //hshs1103 p mode
 void loadData_aof_with_parallel_rdb(void) {
-	serverLog(LL_WARNING, "Load aof_with_parallel_rdb");
 long long start = ustime();
 bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
 
@@ -3919,11 +3917,10 @@ else if (aof && !temp_aof && rdb && temp_rdb) {
 else {
 	serverLog(LL_WARNING, "File is not existed");
 }
-serverLog(LL_WARNING, "Complete aof_with_parallel_rdb");
+serverLog(LL_WARNING, "recovery complete (aof_with_parallel_rdb mode)");
 }
 
 void _loadData_aof_with_parallel_rdb(void) {
-	serverLog(LL_WARNING, "Load aof_with_parallel_rdb");
 long long start = ustime();
 bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
 
@@ -4026,7 +4023,7 @@ else if (aof && !temp_aof && rdb && temp_rdb) {
 else {
 	serverLog(LL_WARNING, "File is not existed");
 }
-serverLog(LL_WARNING, "Complete aof_with_parallel_rdb");
+serverLog(LL_WARNING, "recovery complete (aof_with_parallel_rdb mode)");
 }
 
 void redisOutOfMemoryHandler(size_t allocation_size) {

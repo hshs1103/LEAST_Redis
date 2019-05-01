@@ -1364,7 +1364,7 @@ int rdbSaveWithoutRename() {
     if (fclose(fp) == EOF) goto werr;
 
 
-    serverLog(LL_WARNING,"DB saved on disk(aof_with_rdb mode)");
+    serverLog(LL_NOTICE,"DB saved on disk(aof_with_rdb mode)");
     server.dirty = 0;
     server.lastsave = time(NULL);
     server.lastbgsave_status = C_OK;
