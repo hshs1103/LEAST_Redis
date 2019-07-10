@@ -1,5 +1,3 @@
-This README is just a fast *quick start* document. You can find more detailed documentation at [redis.io](https://redis.io).
-
 LEAST:Logging Exploiting A Split snapshoT
 --------------------------------
 LEAST is a data persistence method for low memory usage and fast performance taking advantage of parallelism.
@@ -15,6 +13,9 @@ redis.conf
     
     aofmode with_rdb
 
+---------------------------------------
+
+This README is just a fast *quick start* document. You can find more detailed documentation at [redis.io](https://redis.io).
 
 What is Redis?
 --------------
