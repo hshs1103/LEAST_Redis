@@ -2273,7 +2273,11 @@ void ParallelbackgroundSaveDoneHandlerDisk(int exitcode, int bysignal){
     /*renaming rdb file*/
    	rdbRenameAllTempFile(server.rdb_pthread);
 
-
+   	/*update LEAST state*/
+   	if(server.init_least == 0) {
+   		serverLog(LL_WARNING, "LEAST is successfully performed");
+   		server.init_least = 1;
+   	}
     server.rdb_child_pid = -1;
     server.rdb_child_type = RDB_CHILD_TYPE_NONE;
     server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
