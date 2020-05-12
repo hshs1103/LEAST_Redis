@@ -1080,6 +1080,7 @@ struct redisServer {
     //hshs1103
     int aof_with_rdb_state;
     int rdb_pthread;
+    int init_least;
 
     /* Logging */
     char *logfile;                  /* Path of log file */

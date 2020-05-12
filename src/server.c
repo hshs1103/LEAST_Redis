@@ -1398,6 +1398,7 @@ void initServerConfig(void) {
     //hshs1103
     server.aof_with_rdb_state = REDIS_AOF_WITH_RDB_OFF;
     server.rdb_pthread =1; //hshs1103 add
+    server.init_least = 0; //hshs1103 add
 
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
