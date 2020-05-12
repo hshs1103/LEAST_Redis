@@ -2112,7 +2112,36 @@ int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 		return C_OK;
 	}
 	/*exception case*/
-	else {
+	else if (flags == 2){
+		int temp_cnt = get_tempfile_cnt();
+		int dump_cnt = get_dumpfile_cnt();
+		for (i=0; i < server.rdb_pthread; i++){
+			int idx = i+1;
+			if (i < dump_cnt){
+				memset(rdbfile, 0, sizeof(rdbfile));
+				snprintf(rdbfile, 256, "dump%d.rdb",idx);
+				if((fp = fopen(rdbfile, "r")) == NULL)
+					continue;
+				startLoading(fp);
+				rioInitWithFile(&rdb,fp);
+				retval = rdbLoadRio(&rdb,rsi,0);
+				fclose(fp);
+				stopLoading();
+			} else {
+				memset(rdbfile, 0, sizeof(rdbfile));
+				snprintf(rdbfile, 256, "temp%d.rdb",idx);
+				if((fp = fopen(rdbfile, "r")) == NULL)
+					continue;
+				startLoading(fp);
+				rioInitWithFile(&rdb,fp);
+				retval = rdbLoadRio(&rdb,rsi,0);
+				fclose(fp);
+				stopLoading();
+			}
+		}
+		return C_OK;
+	}
+	else if (flags == 3){
 		int temp_cnt = get_tempfile_cnt();
 		int dump_cnt = get_dumpfile_cnt();
 		int read_dump = dump_cnt - temp_cnt;
@@ -2141,6 +2170,10 @@ int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 			}
 		}
 		return C_OK;
+	}
+	else {
+		serverLog(LL_WARNING, "RECOVERY ERR CASE");
+		return C_ERR;
 	}
 }
 
@@ -2273,11 +2306,6 @@ void ParallelbackgroundSaveDoneHandlerDisk(int exitcode, int bysignal){
     /*renaming rdb file*/
    	rdbRenameAllTempFile(server.rdb_pthread);
 
-   	/*update LEAST state*/
-   	if(server.init_least == 0) {
-   		serverLog(LL_WARNING, "LEAST is successfully performed");
-   		server.init_least = 1;
-   	}
     server.rdb_child_pid = -1;
     server.rdb_child_type = RDB_CHILD_TYPE_NONE;
     server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;

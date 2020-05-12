@@ -1080,7 +1080,6 @@ struct redisServer {
     //hshs1103
     int aof_with_rdb_state;
     int rdb_pthread;
-    int init_least;
 
     /* Logging */
     char *logfile;                  /* Path of log file */
@@ -1555,6 +1554,7 @@ void loadData_aof_with_rdb(void);
 void aof_with_rdb(void);
 void loadData_aof_with_parallel_rdb(void);
 void _loadData_aof_with_parallel_rdb(void);
+void __loadData_aof_with_parallel_rdb(void);
 
 /* RDB persistence */
 #include "rdb.h"

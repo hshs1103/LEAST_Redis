@@ -1398,7 +1398,6 @@ void initServerConfig(void) {
     //hshs1103
     server.aof_with_rdb_state = REDIS_AOF_WITH_RDB_OFF;
     server.rdb_pthread =1; //hshs1103 add
-    server.init_least = 0; //hshs1103 add
 
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
@@ -3593,17 +3592,28 @@ void loadDataFromDisk(void) {
 	if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) {
 		if(server.rdb_pthread > 1){
 			serverLog(LL_WARNING, "aof_with_parallel_rdb on");
-			if( get_dumpfile_cnt() == 0 && get_tempfile_cnt() ==0){
+			int dump_cnt = get_dumpfile_cnt();
+			int temp_cnt = get_tempfile_cnt();
+			if( dump_cnt == 0 && temp_cnt ==0){
 				loadData_aof_with_parallel_rdb();
 				return;
-			} else if ( get_dumpfile_cnt() ==0 || get_tempfile_cnt() ==0) {
+			} else if ( dump_cnt ==0 || temp_cnt ==0) {
 				loadData_aof_with_parallel_rdb();
 				return;
-			} else if ( get_dumpfile_cnt() ==  get_tempfile_cnt()) {
+			} else if ( (dump_cnt ==  temp_cnt) && (dump_cnt == server.rdb_pthread) && (temp_cnt == server.rdb_pthread)) {
 				loadData_aof_with_parallel_rdb();
 				return;
 			} else {
-				_loadData_aof_with_parallel_rdb();
+				if((dump_cnt + temp_cnt) == server.rdb_pthread) {
+					serverLog(LL_WARNING, "The system shut down before the first LEAST operation ended");
+					__loadData_aof_with_parallel_rdb();
+				} else if ((dump_cnt + temp_cnt) > server.rdb_pthread) {
+					serverLog(LL_WARNING, "The system shut down after the first LEAST operation ended");
+					_loadData_aof_with_parallel_rdb();
+				} else {
+					serverLog(LL_WARNING,"Fatal error loading the DB. Please check the status of log files and redis configuration(parallel_rdb_thread).");
+					exit(1);
+				}
 				return;
 			}
 		} else {
@@ -3999,6 +4009,113 @@ else {
 }
 serverLog(LL_WARNING, "recovery complete (aof_with_parallel_rdb mode)");
 }
+
+void __loadData_aof_with_parallel_rdb(void) {
+long long start = ustime();
+bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
+
+if (access(REDIS_DEFAULT_TEMP_AOF_FILENAME, F_OK) == 0) temp_aof = true;
+if (checktempfile(server.rdb_pthread) == 0) temp_rdb =true;
+if (access(server.aof_filename, F_OK) == 0) aof = true;
+if (checkdumpfile(server.rdb_pthread) == 0) rdb =true;
+
+
+
+
+if (aof && !temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && !temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && !rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(0, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && !temp_rdb){
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+        (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK)
+        serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+}
+else if (aof && temp_aof && rdb && !temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(1, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(REDIS_DEFAULT_TEMP_AOF_FILENAME) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else if (aof && !temp_aof && rdb && temp_rdb) {
+    start = ustime();
+    if (Parallel_rdbLoad(2, NULL) == C_OK) {
+    	serverLog(LL_NOTICE,"temp DB loaded from disk: %.3f seconds",
+            (float)(ustime()-start)/1000000);
+    }
+    start = ustime();
+    if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
+    	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    }
+}
+else {
+	serverLog(LL_WARNING, "File is not existed");
+}
+serverLog(LL_WARNING, "recovery complete (aof_with_parallel_rdb mode)");
+}
+
 
 void redisOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
