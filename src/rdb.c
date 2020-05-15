@@ -1444,13 +1444,13 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         server.rdb_child_pid = childpid;
 
         //hshs1103
-        if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON & server.rdb_pthread == 1){
+        if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) && (server.rdb_pthread == 1)){
         	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_RDB;
         }
-        else if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON & server.rdb_pthread > 1) {
+        else if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) && (server.rdb_pthread > 1)) {
         	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB;
         }
-        else if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF & server.rdb_pthread > 1) {
+        else if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF) && (server.rdb_pthread > 1)) {
         	server.rdb_child_type = RDB_CHILD_TYPE_PARALLEL_RDB;
         }
         else {
