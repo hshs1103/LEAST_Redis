@@ -2113,7 +2113,6 @@ int Parallel_rdbLoad(int flags, rdbSaveInfo *rsi){
 	}
 	/*exception case*/
 	else if (flags == 2){
-		int temp_cnt = get_tempfile_cnt();
 		int dump_cnt = get_dumpfile_cnt();
 		for (i=0; i < server.rdb_pthread; i++){
 			int idx = i+1;
